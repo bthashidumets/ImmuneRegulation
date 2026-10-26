@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingress 免疫時間予測</title>
+<style>
+:root { color-scheme: light dark; --line: #8885; --panel: #8881; }
+* { box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, sans-serif; margin: 0 auto; padding: 18px; max-width: 760px; line-height: 1.5; }
+h1 { font-size: 1.45rem; margin: 0 0 8px; }
+.sub { opacity: .8; margin: 0 0 18px; }
+.panel { border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 14px 0; }
+label { display: block; font-weight: 650; margin: 12px 0 5px; }
+input, select, button { font: inherit; width: 100%; padding: 11px; border-radius: 9px; border: 1px solid var(--line); }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+button { margin-top: 16px; cursor: pointer; font-weight: 700; }
+table { border-collapse: collapse; width: 100%; margin-top: 10px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 10px 7px; border-bottom: 1px solid var(--line); }
+th { font-size: .9rem; }
+.blue { color: #2589ff; font-weight: 750; }
+.green { color: #22a06b; font-weight: 750; }
+.note { font-size: .92rem; opacity: .85; }
+.result-head { font-size: 1.05rem; font-weight: 750; }
+.error { color: #d44; }
+@media (max-width: 520px) { .grid { grid-template-columns: 1fr; } th, td { padding: 8px 4px; font-size: .9rem; } }
+</style>
+</head>
+<body>
+<h1>Ingress 免疫時間予測</h1>
+<p class="sub">Cygnus Shard Storm — Portal Immunity Instability</p>
+
+<section class="panel">
+  <label for="lastFlip">前回の免疫付与（反転）日時</label>
+  <input id="lastFlip" type="datetime-local" step="60">
+  <div class="grid">
+    <div>
+      <label for="color">現在のポータルの色</label>
+      <select id="color">
+        <option value="blue">青（Resistance）</option>
+        <option value="green">緑（Enlightened）</option>
+      </select>
+    </div>
+    <div>
+      <label for="duration">現在の免疫保持時間（分）</label>
+      <input id="duration" type="number" min="5" max="55" step="1" value="20">
+    </div>
+  </div>
+  <label for="count">予測する反転回数</label>
+  <select id="count">
+    <option value="6">6回</option>
+    <option value="12" selected>12回</option>
+    <option value="24">24回</option>
+    <option value="48">48回</option>
+  </select>
+  <button id="calculate">予測を更新</button>
+  <p id="error" class="error" role="alert"></p>
+</section>
+
+<section class="panel" id="summary" aria-live="polite">
+  入力すると予測結果が表示されます。
+</section>
+<section class="panel">
+  <div class="result-head">反転予測一覧</div>
+  <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>回数</th><th>予測時刻</th><th>反転後の色</th><th>前回から</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</section>
+<p class="note">注意：公式ルールでは免疫保持時間は約30分ごとに変更され、次の時間は事前に分かりません。この一覧は、入力した分数が継続し、免疫切れのたびに必ず反転するという仮定に基づく試算です。現実の反転時刻・色を保証するものではありません。</p>
+
+<script>
+const $ = id => document.getElementById(id);
+function fmt(d) {
+  return new Intl.DateTimeFormat('ja-JP', {
+    year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', weekday:'short',
+    hour12:false
+  }).format(d);
+}
+function run() {
+  $('error').textContent = '';
+  $('rows').innerHTML = '';
+  const raw = $('lastFlip').value;
+  const mins = Number($('duration').value);
+  const n = Number($('count').value);
+  if (!raw) { $('error').textContent = '前回の免疫付与日時を入力してください。'; return; }
+  if (!Number.isInteger(mins) || mins < 5 || mins > 55) {
+    $('error').textContent = '免疫保持時間は5〜55分の整数で入力してください。'; return;
+  }
+  const last = new Date(raw);
+  if (Number.isNaN(last.getTime())) { $('error').textContent = '日時を確認してください。'; return; }
+  const now = new Date();
+  const elapsed = (now - last) / 60000;
+  const remaining = mins - elapsed;
+  const currentColor = $('color').value;
+  const currentLabel = currentColor === 'blue' ? '青（Resistance）' : '緑（Enlightened）';
+  const first = new Date(last.getTime() + mins * 60000);
+  const isPast = first <= now;
+  $('summary').innerHTML =
+    `<div>入力された前回の反転：<strong>${fmt(last)}</strong></div>` +
+    `<div>現在の色：<strong class="${currentColor}">${currentLabel}</strong></div>` +
+    `<div>仮定する免疫保持時間：<strong>${mins}分</strong></div>` +
+    `<div style="margin-top:10px">${isPast
+      ? `計算上の次回免疫切れは <strong>${fmt(first)}</strong> です。すでに経過しています。入力した保持時間が一定なら、次の反転予測は過去の時刻から積み上げて表示されます。`
+      : `次回の免疫切れ予測：<strong>${fmt(first)}</strong>（あと約${Math.ceil(remaining)}分）`}</div>`;
+  let color = currentColor;
+  for (let i = 1; i <= n; i++) {
+    const at = new Date(last.getTime() + mins * 60000 * i);
+    color = color === 'blue' ? 'green' : 'blue';
+    const label = color === 'blue' ? '青（Resistance）' : '緑（Enlightened）';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${i}</td><td>${fmt(at)}</td><td class="${color}">${label}</td><td>${mins}分</td>`;
+    $('rows').appendChild(tr);
+  }
+}
+$('calculate').addEventListener('click', run);
+$('lastFlip').value = (() => {
+  const d = new Date(Date.now() - 20 * 60000);
+  const pad = x => String(x).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+})();
+run();
+</script>
+</body>
+</html>
